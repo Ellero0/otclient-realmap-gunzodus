@@ -1,11 +1,13 @@
 Module
   name: minimap_updater
-  description: Auto-update minimap from GitHub
+  description: Auto-update minimap from GitHub before character selection
   author: Ellero0
   website: https://github.com/Ellero0/otclient-realmap-gunzodus
   scripts: [ minimap_updater ]
+  dependencies:
+    - client_entergame
   autoload: true
-  autoload-priority: 50
+  autoload-priority: 1000
   sandboxed: true
   @onLoad: init()
   @onUnload: terminate()
