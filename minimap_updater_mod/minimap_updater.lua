@@ -1,6 +1,7 @@
 --[[
   Minimap Auto-Updater for OTClientV8
   Checks GitHub for updates BEFORE character list is shown
+  Waits for complete download and verifies file size
 
   GitHub: https://github.com/Ellero0/otclient-realmap-gunzodus
 ]]--
@@ -21,6 +22,7 @@ local isChecking = false
 local isDownloading = false
 local pendingCallback = nil
 local originalCharacterListShow = nil
+local expectedFileSize = 0
 
 -- Initialize module
 function init()
@@ -48,7 +50,6 @@ end
 function terminate()
   HTTP.cancel(httpOperationId)
   MinimapUpdater.destroyWindow()
-  -- Restore original function
   if originalCharacterListShow and CharacterList then
     CharacterList.show = originalCharacterListShow
   end
@@ -96,10 +97,8 @@ function MinimapUpdater.checkForUpdates()
   isChecking = true
   g_logger.info("[MinimapUpdater] Checking for updates...")
 
-  -- Show checking window
   MinimapUpdater.showWindow("Checking for minimap updates...", 0)
 
-  -- Query GitHub API for latest release
   httpOperationId = HTTP.getJSON(CONFIG.github_api, function(data, err)
     isChecking = false
 
@@ -123,12 +122,16 @@ function MinimapUpdater.checkForUpdates()
 
     g_logger.info("[MinimapUpdater] Local: " .. localVersion .. ", Remote: " .. remoteVersion)
 
-    -- Find download URL
+    -- Find download URL and file size from assets
     local downloadUrl = nil
+    expectedFileSize = 0
+
     if data.assets then
       for _, asset in ipairs(data.assets) do
         if asset.name == CONFIG.minimap_file then
           downloadUrl = asset.browser_download_url
+          expectedFileSize = asset.size or 0
+          g_logger.info("[MinimapUpdater] Found asset: " .. asset.name .. " size: " .. tostring(expectedFileSize))
           break
         end
       end
@@ -136,12 +139,13 @@ function MinimapUpdater.checkForUpdates()
 
     if not downloadUrl then
       downloadUrl = "https://github.com/Ellero0/otclient-realmap-gunzodus/releases/latest/download/" .. CONFIG.minimap_file
+      g_logger.info("[MinimapUpdater] Using fallback URL (no size check)")
     end
 
     MinimapUpdater.destroyWindow()
 
     if remoteVersion ~= localVersion then
-      MinimapUpdater.showUpdateDialog(remoteVersion, localVersion, releaseName, downloadUrl)
+      MinimapUpdater.showUpdateDialog(remoteVersion, localVersion, releaseName, downloadUrl, expectedFileSize)
     else
       g_logger.info("[MinimapUpdater] Minimap is up to date")
       MinimapUpdater.continueToCharacterList()
@@ -149,7 +153,7 @@ function MinimapUpdater.checkForUpdates()
   end)
 end
 
--- Show progress window using .otui
+-- Show progress window
 function MinimapUpdater.showWindow(status, percent)
   MinimapUpdater.destroyWindow()
 
@@ -161,12 +165,16 @@ function MinimapUpdater.showWindow(status, percent)
 
     local statusLabel = updateWindow:getChildById('statusLabel')
     local progressBar = updateWindow:getChildById('progressBar')
+    local speedLabel = updateWindow:getChildById('speedLabel')
 
     if statusLabel then
       statusLabel:setText(status)
     end
     if progressBar then
       progressBar:setPercent(percent)
+    end
+    if speedLabel then
+      speedLabel:setText("")
     end
   end
 end
@@ -190,16 +198,21 @@ function MinimapUpdater.updateProgress(status, percent, speed)
   end
 end
 
--- Show update available dialog
-function MinimapUpdater.showUpdateDialog(newVersion, oldVersion, releaseName, downloadUrl)
+-- Show update dialog
+function MinimapUpdater.showUpdateDialog(newVersion, oldVersion, releaseName, downloadUrl, fileSize)
+  local sizeStr = ""
+  if fileSize > 0 then
+    sizeStr = string.format("\nSize: %.2f MB", fileSize / 1024 / 1024)
+  end
+
   local message = string.format(
     "New minimap update available!\n\n" ..
     "Current: %s\n" ..
-    "New: %s (%s)\n\n" ..
+    "New: %s%s\n\n" ..
     "Download now?",
     oldVersion == "none" and "Not installed" or oldVersion,
     newVersion,
-    releaseName
+    sizeStr
   )
 
   local msgBox = displayGeneralBox(
@@ -207,7 +220,7 @@ function MinimapUpdater.showUpdateDialog(newVersion, oldVersion, releaseName, do
     message,
     {
       { text = "Yes, Update", callback = function()
-        MinimapUpdater.downloadUpdate(downloadUrl, newVersion)
+        MinimapUpdater.downloadUpdate(downloadUrl, newVersion, fileSize)
       end},
       { text = "No, Skip", callback = function()
         g_logger.info("[MinimapUpdater] Update skipped by user")
@@ -223,44 +236,108 @@ function MinimapUpdater.showUpdateDialog(newVersion, oldVersion, releaseName, do
   )
 end
 
--- Download and install update
-function MinimapUpdater.downloadUpdate(downloadUrl, newVersion)
+-- Download update with size verification
+function MinimapUpdater.downloadUpdate(downloadUrl, newVersion, fileSize)
   g_logger.info("[MinimapUpdater] Downloading: " .. downloadUrl)
+  g_logger.info("[MinimapUpdater] Expected size: " .. tostring(fileSize) .. " bytes")
+
   isDownloading = true
+  expectedFileSize = fileSize
 
-  -- Show download window
-  MinimapUpdater.showWindow("Downloading minimap update...", 0)
+  MinimapUpdater.showWindow("Starting download...", 0)
 
-  -- Download the file
+  local downloadStartTime = os.time()
+  local lastProgress = 0
+
   httpOperationId = HTTP.download(downloadUrl, CONFIG.minimap_file,
     function(path, checksum, err)
       isDownloading = false
-      MinimapUpdater.destroyWindow()
 
       if err then
         g_logger.error("[MinimapUpdater] Download failed: " .. tostring(err))
+        MinimapUpdater.destroyWindow()
         displayErrorBox("Download Failed", "Failed to download minimap:\n" .. tostring(err)).onOk = function()
           MinimapUpdater.continueToCharacterList()
         end
         return
       end
 
-      g_logger.info("[MinimapUpdater] Download complete!")
+      g_logger.info("[MinimapUpdater] Download complete, path: " .. tostring(path))
+      g_logger.info("[MinimapUpdater] Checksum: " .. tostring(checksum))
+
+      -- Update status
+      MinimapUpdater.updateProgress("Verifying download...", 100, nil)
+
+      -- Verify file exists in downloads
+      local downloadedFile = '/downloads/' .. CONFIG.minimap_file
+      if not g_resources.fileExists(downloadedFile) then
+        g_logger.error("[MinimapUpdater] Downloaded file not found: " .. downloadedFile)
+        MinimapUpdater.destroyWindow()
+        displayErrorBox("Download Failed", "Downloaded file not found.\nPlease try again.").onOk = function()
+          MinimapUpdater.continueToCharacterList()
+        end
+        return
+      end
+
+      -- Check file size if we know expected size
+      if expectedFileSize > 0 then
+        local localSize = g_resources.fileSize(downloadedFile)
+        g_logger.info("[MinimapUpdater] Local size: " .. tostring(localSize) .. ", Expected: " .. tostring(expectedFileSize))
+
+        if localSize and localSize > 0 then
+          if localSize < expectedFileSize * 0.9 then
+            -- File is too small (less than 90% of expected)
+            g_logger.error("[MinimapUpdater] File too small: " .. tostring(localSize) .. " < " .. tostring(expectedFileSize))
+            MinimapUpdater.destroyWindow()
+            displayErrorBox("Download Incomplete",
+              string.format("Download incomplete!\n\nExpected: %.2f MB\nGot: %.2f MB\n\nPlease try again.",
+                expectedFileSize / 1024 / 1024,
+                localSize / 1024 / 1024)
+            ).onOk = function()
+              MinimapUpdater.continueToCharacterList()
+            end
+            return
+          end
+        end
+      end
+
+      -- Try to copy to minimap location
+      MinimapUpdater.updateProgress("Installing minimap...", 100, nil)
+
+      -- Copy file to minimap locations
+      local success = MinimapUpdater.installMinimap(downloadedFile)
+
+      MinimapUpdater.destroyWindow()
 
       -- Save version
       g_settings.set(CONFIG.version_key, newVersion)
 
-      -- Show success
-      displayInfoBox("Update Complete",
-        "Minimap updated to " .. newVersion .. "!\n\n" ..
-        "File saved. Restart client to apply."
-      ).onOk = function()
-        MinimapUpdater.continueToCharacterList()
+      if success then
+        displayInfoBox("Update Complete",
+          "Minimap updated to " .. newVersion .. "!\n\n" ..
+          "Restart the client to use the new minimap."
+        ).onOk = function()
+          MinimapUpdater.continueToCharacterList()
+        end
+      else
+        displayInfoBox("Download Complete",
+          "Minimap " .. newVersion .. " downloaded!\n\n" ..
+          "File is in the downloads folder.\n" ..
+          "Please copy it manually to your minimap folder."
+        ).onOk = function()
+          MinimapUpdater.continueToCharacterList()
+        end
       end
     end,
     function(progress, speed)
+      lastProgress = progress
+      local sizeInfo = ""
+      if expectedFileSize > 0 then
+        local downloaded = (progress / 100) * expectedFileSize
+        sizeInfo = string.format(" (%.1f / %.1f MB)", downloaded / 1024 / 1024, expectedFileSize / 1024 / 1024)
+      end
       MinimapUpdater.updateProgress(
-        string.format("Downloading... %d%%", progress),
+        string.format("Downloading... %d%%%s", progress, sizeInfo),
         progress,
         speed
       )
@@ -268,7 +345,38 @@ function MinimapUpdater.downloadUpdate(downloadUrl, newVersion)
   )
 end
 
--- Continue to show character list
+-- Install minimap to correct locations
+function MinimapUpdater.installMinimap(sourcePath)
+  local success = false
+
+  -- Try to copy to various minimap locations
+  local destinations = {
+    '/' .. CONFIG.minimap_file,
+    '/minimap.otmm',
+    '/minimap1000.otmm'
+  }
+
+  for _, dest in ipairs(destinations) do
+    local ok = pcall(function()
+      if g_resources.fileExists(sourcePath) then
+        -- Read source file
+        local content = g_resources.readFileContents(sourcePath)
+        if content and #content > 1000000 then  -- At least 1MB
+          g_resources.writeFileContents(dest, content)
+          g_logger.info("[MinimapUpdater] Copied to: " .. dest)
+          success = true
+        end
+      end
+    end)
+    if not ok then
+      g_logger.warning("[MinimapUpdater] Failed to copy to: " .. dest)
+    end
+  end
+
+  return success
+end
+
+-- Continue to character list
 function MinimapUpdater.continueToCharacterList()
   if pendingCallback then
     local callback = pendingCallback
