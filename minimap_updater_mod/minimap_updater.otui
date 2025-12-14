@@ -1,0 +1,43 @@
+MainWindow
+  id: minimapUpdaterWindow
+  !text: tr('Minimap Updater')
+  size: 350 140
+  @onEscape: MinimapUpdater.onCancel()
+
+  Label
+    id: statusLabel
+    !text: tr('Checking for minimap updates...')
+    text-align: center
+    anchors.top: parent.top
+    anchors.left: parent.left
+    anchors.right: parent.right
+    margin-top: 20
+
+  ProgressBar
+    id: progressBar
+    height: 20
+    background-color: #00aa00
+    anchors.top: statusLabel.bottom
+    anchors.left: parent.left
+    anchors.right: parent.right
+    margin-top: 15
+    margin-left: 20
+    margin-right: 20
+    phantom: false
+
+  Label
+    id: speedLabel
+    text-align: center
+    anchors.top: progressBar.bottom
+    anchors.left: parent.left
+    anchors.right: parent.right
+    margin-top: 5
+
+  Button
+    id: cancelButton
+    !text: tr('Cancel')
+    width: 80
+    anchors.bottom: parent.bottom
+    anchors.horizontalCenter: parent.horizontalCenter
+    margin-bottom: 10
+    @onClick: MinimapUpdater.onCancel()

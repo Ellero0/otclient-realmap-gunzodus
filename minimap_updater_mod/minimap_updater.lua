@@ -19,11 +19,10 @@ local httpOperationId = 0
 local updateWindow = nil
 local isChecking = false
 local isDownloading = false
-local updateReady = true  -- Set to false while checking
 local pendingCallback = nil
 local originalCharacterListShow = nil
 
--- Initialize module - runs early before character list
+-- Initialize module
 function init()
   -- Default to enabled
   if g_settings.getString(CONFIG.enabled_key) == "" then
@@ -48,15 +47,20 @@ end
 -- Cleanup
 function terminate()
   HTTP.cancel(httpOperationId)
-  if updateWindow then
-    updateWindow:destroy()
-    updateWindow = nil
-  end
+  MinimapUpdater.destroyWindow()
   -- Restore original function
   if originalCharacterListShow and CharacterList then
     CharacterList.show = originalCharacterListShow
   end
   g_logger.info("[MinimapUpdater] Terminated")
+end
+
+-- Destroy update window
+function MinimapUpdater.destroyWindow()
+  if updateWindow then
+    updateWindow:destroy()
+    updateWindow = nil
+  end
 end
 
 -- Called before character list is shown
@@ -76,6 +80,15 @@ function MinimapUpdater.onBeforeCharacterList(callback)
   MinimapUpdater.checkForUpdates()
 end
 
+-- Cancel button handler
+function MinimapUpdater.onCancel()
+  HTTP.cancel(httpOperationId)
+  isChecking = false
+  isDownloading = false
+  MinimapUpdater.destroyWindow()
+  MinimapUpdater.continueToCharacterList()
+end
+
 -- Check GitHub for updates
 function MinimapUpdater.checkForUpdates()
   if isChecking then return end
@@ -84,7 +97,7 @@ function MinimapUpdater.checkForUpdates()
   g_logger.info("[MinimapUpdater] Checking for updates...")
 
   -- Show checking window
-  MinimapUpdater.showCheckingWindow()
+  MinimapUpdater.showWindow("Checking for minimap updates...", 0)
 
   -- Query GitHub API for latest release
   httpOperationId = HTTP.getJSON(CONFIG.github_api, function(data, err)
@@ -92,13 +105,15 @@ function MinimapUpdater.checkForUpdates()
 
     if err then
       g_logger.warning("[MinimapUpdater] Check failed: " .. tostring(err))
-      MinimapUpdater.closeWindowAndContinue()
+      MinimapUpdater.destroyWindow()
+      MinimapUpdater.continueToCharacterList()
       return
     end
 
     if not data or not data.tag_name then
       g_logger.warning("[MinimapUpdater] Invalid GitHub response")
-      MinimapUpdater.closeWindowAndContinue()
+      MinimapUpdater.destroyWindow()
+      MinimapUpdater.continueToCharacterList()
       return
     end
 
@@ -123,44 +138,60 @@ function MinimapUpdater.checkForUpdates()
       downloadUrl = "https://github.com/Ellero0/otclient-realmap-gunzodus/releases/latest/download/" .. CONFIG.minimap_file
     end
 
+    MinimapUpdater.destroyWindow()
+
     if remoteVersion ~= localVersion then
       MinimapUpdater.showUpdateDialog(remoteVersion, localVersion, releaseName, downloadUrl)
     else
       g_logger.info("[MinimapUpdater] Minimap is up to date")
-      MinimapUpdater.closeWindowAndContinue()
+      MinimapUpdater.continueToCharacterList()
     end
   end)
 end
 
--- Show "Checking for updates" window
-function MinimapUpdater.showCheckingWindow()
+-- Show progress window using .otui
+function MinimapUpdater.showWindow(status, percent)
+  MinimapUpdater.destroyWindow()
+
+  updateWindow = g_ui.displayUI('minimap_updater')
   if updateWindow then
-    updateWindow:destroy()
+    updateWindow:show()
+    updateWindow:raise()
+    updateWindow:focus()
+
+    local statusLabel = updateWindow:getChildById('statusLabel')
+    local progressBar = updateWindow:getChildById('progressBar')
+
+    if statusLabel then
+      statusLabel:setText(status)
+    end
+    if progressBar then
+      progressBar:setPercent(percent)
+    end
   end
+end
 
-  updateWindow = g_ui.createWidget('MainWindow', rootWidget)
-  updateWindow:setId('minimapUpdateWindow')
-  updateWindow:setText('Minimap Updater')
-  updateWindow:setSize({width = 300, height = 100})
-  updateWindow:center()
+-- Update progress
+function MinimapUpdater.updateProgress(status, percent, speed)
+  if not updateWindow then return end
 
-  local label = g_ui.createWidget('Label', updateWindow)
-  label:setId('statusLabel')
-  label:setText('Checking for minimap updates...')
-  label:setTextAlign(AlignCenter)
-  label:addAnchor(AnchorTop, 'parent', AnchorTop)
-  label:addAnchor(AnchorLeft, 'parent', AnchorLeft)
-  label:addAnchor(AnchorRight, 'parent', AnchorRight)
-  label:setMarginTop(30)
+  local statusLabel = updateWindow:getChildById('statusLabel')
+  local progressBar = updateWindow:getChildById('progressBar')
+  local speedLabel = updateWindow:getChildById('speedLabel')
+
+  if statusLabel then
+    statusLabel:setText(status)
+  end
+  if progressBar then
+    progressBar:setPercent(percent)
+  end
+  if speedLabel and speed then
+    speedLabel:setText(speed .. " KB/s")
+  end
 end
 
 -- Show update available dialog
 function MinimapUpdater.showUpdateDialog(newVersion, oldVersion, releaseName, downloadUrl)
-  if updateWindow then
-    updateWindow:destroy()
-    updateWindow = nil
-  end
-
   local message = string.format(
     "New minimap update available!\n\n" ..
     "Current: %s\n" ..
@@ -182,7 +213,7 @@ function MinimapUpdater.showUpdateDialog(newVersion, oldVersion, releaseName, do
         g_logger.info("[MinimapUpdater] Update skipped by user")
         MinimapUpdater.continueToCharacterList()
       end},
-      { text = "Disable Updates", callback = function()
+      { text = "Disable", callback = function()
         g_settings.set(CONFIG.enabled_key, "false")
         g_logger.info("[MinimapUpdater] Auto-update disabled")
         MinimapUpdater.continueToCharacterList()
@@ -197,51 +228,14 @@ function MinimapUpdater.downloadUpdate(downloadUrl, newVersion)
   g_logger.info("[MinimapUpdater] Downloading: " .. downloadUrl)
   isDownloading = true
 
-  -- Create progress window
-  updateWindow = g_ui.createWidget('MainWindow', rootWidget)
-  updateWindow:setId('minimapDownloadWindow')
-  updateWindow:setText('Downloading Minimap')
-  updateWindow:setSize({width = 350, height = 130})
-  updateWindow:center()
-
-  local label = g_ui.createWidget('Label', updateWindow)
-  label:setId('statusLabel')
-  label:setText('Downloading minimap update...')
-  label:setTextAlign(AlignCenter)
-  label:addAnchor(AnchorTop, 'parent', AnchorTop)
-  label:addAnchor(AnchorLeft, 'parent', AnchorLeft)
-  label:addAnchor(AnchorRight, 'parent', AnchorRight)
-  label:setMarginTop(20)
-
-  local progressBar = g_ui.createWidget('ProgressBar', updateWindow)
-  progressBar:setId('progressBar')
-  progressBar:setPercent(0)
-  progressBar:addAnchor(AnchorTop, 'statusLabel', AnchorBottom)
-  progressBar:addAnchor(AnchorLeft, 'parent', AnchorLeft)
-  progressBar:addAnchor(AnchorRight, 'parent', AnchorRight)
-  progressBar:setMarginTop(15)
-  progressBar:setMarginLeft(20)
-  progressBar:setMarginRight(20)
-  progressBar:setHeight(20)
-
-  local speedLabel = g_ui.createWidget('Label', updateWindow)
-  speedLabel:setId('speedLabel')
-  speedLabel:setText('')
-  speedLabel:setTextAlign(AlignCenter)
-  speedLabel:addAnchor(AnchorTop, 'progressBar', AnchorBottom)
-  speedLabel:addAnchor(AnchorLeft, 'parent', AnchorLeft)
-  speedLabel:addAnchor(AnchorRight, 'parent', AnchorRight)
-  speedLabel:setMarginTop(5)
+  -- Show download window
+  MinimapUpdater.showWindow("Downloading minimap update...", 0)
 
   -- Download the file
   httpOperationId = HTTP.download(downloadUrl, CONFIG.minimap_file,
     function(path, checksum, err)
       isDownloading = false
-
-      if updateWindow then
-        updateWindow:destroy()
-        updateWindow = nil
-      end
+      MinimapUpdater.destroyWindow()
 
       if err then
         g_logger.error("[MinimapUpdater] Download failed: " .. tostring(err))
@@ -256,41 +250,22 @@ function MinimapUpdater.downloadUpdate(downloadUrl, newVersion)
       -- Save version
       g_settings.set(CONFIG.version_key, newVersion)
 
-      -- Show success and continue
+      -- Show success
       displayInfoBox("Update Complete",
         "Minimap updated to " .. newVersion .. "!\n\n" ..
-        "File saved to downloads folder.\n" ..
-        "Copy to your minimap folder if needed."
+        "File saved. Restart client to apply."
       ).onOk = function()
         MinimapUpdater.continueToCharacterList()
       end
     end,
     function(progress, speed)
-      if updateWindow then
-        local progressBar = updateWindow:getChildById('progressBar')
-        local statusLabel = updateWindow:getChildById('statusLabel')
-        local speedLabel = updateWindow:getChildById('speedLabel')
-        if progressBar then
-          progressBar:setPercent(progress)
-        end
-        if statusLabel then
-          statusLabel:setText(string.format('Downloading... %d%%', progress))
-        end
-        if speedLabel then
-          speedLabel:setText(speed .. ' KB/s')
-        end
-      end
+      MinimapUpdater.updateProgress(
+        string.format("Downloading... %d%%", progress),
+        progress,
+        speed
+      )
     end
   )
-end
-
--- Close window and continue to character list
-function MinimapUpdater.closeWindowAndContinue()
-  if updateWindow then
-    updateWindow:destroy()
-    updateWindow = nil
-  end
-  MinimapUpdater.continueToCharacterList()
 end
 
 -- Continue to show character list
