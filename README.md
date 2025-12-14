@@ -4,18 +4,7 @@ Pre-generated minimap files for OTClientV8 based on [tibiamaps.io](https://tibia
 
 ## Quick Install
 
-### Option 1: Auto-Updater (Recommended)
-
-Install the auto-updater mod to automatically check for minimap updates:
-
-1. Download the `minimap_updater_mod` folder from this repository
-2. Copy it to your OTClient mods folder:
-   ```
-   [OTClient]\mods\minimap_updater_mod\
-   ```
-3. Start OTClient - it will automatically check for updates on startup
-
-The mod will show a popup when a new version is available.
+### Option 1: Auto-Updater (Recommended) - NOT YET WORKING
 
 ### Option 2: Manual Download
 
