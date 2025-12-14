@@ -8,6 +8,7 @@
 
 ### Generator
 - C# parallel minimap generator
+- Full markers.json included for auto-updater
 - z=7 ground-level markers imported to config.otml
 
 ---
