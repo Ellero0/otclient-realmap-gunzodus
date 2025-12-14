@@ -1,0 +1,11 @@
+Module
+  name: minimap_updater
+  description: Auto-update minimap from GitHub
+  author: Ellero0
+  website: https://github.com/Ellero0/otclient-realmap-gunzodus
+  scripts: [ minimap_updater ]
+  autoload: true
+  autoload-priority: 50
+  sandboxed: true
+  @onLoad: init()
+  @onUnload: terminate()
